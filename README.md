@@ -13,7 +13,7 @@ various wireless headsets, with enhanced KDE Plasma integration.
 > 
 > **Credit**: Original concept, design, and implementation by [centic9](https://github.com/centic9). This Qt6 port focuses on enhanced KDE Plasma integration while maintaining compatibility with the original HeadsetControl backend.
 
-![Screenshot](headset-charge-indicator.png)
+![Screenshot](headset-charge-indicator-qt.png)
 
 It supports displaying the battery charge with color-coded icons, desktop notifications, turning on/off LEDs and adjusting the sidetone level of the microphone. 
 
