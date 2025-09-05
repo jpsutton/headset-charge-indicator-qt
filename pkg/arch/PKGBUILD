@@ -1,8 +1,8 @@
 # Maintainer: Caltlgin Stsodaat <contact@fossdaily.xyz>
 
-_pkgname='headset-charge-indicator'
-pkgname="${_pkgname}-qt-git"
-pkgver=1.0.0.0.r33.g795705a
+_pkgname='headset-charge-indicator-qt'
+pkgname="${_pkgname}-git"
+pkgver=0.r85.4dc1454
 pkgrel=1
 pkgdesc='Qt6-based system tray application to display battery charge of wireless headsets with enhanced KDE Plasma integration'
 arch=('any')
@@ -17,7 +17,14 @@ source=("git+${url}.git")
 sha256sums=('SKIP')
 
 pkgver() {
-  git -C "${_pkgname}" describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  cd "${_pkgname}"
+  # Try to get version from tags first, fall back to commit count if no tags exist
+  if git describe --long --tags >/dev/null 2>&1; then
+    git describe --long --tags | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+  else
+    # No tags found, use commit count and hash
+    printf "0.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  fi
 }
 
 package() {
