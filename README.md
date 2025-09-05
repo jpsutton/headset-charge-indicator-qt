@@ -39,7 +39,11 @@ On Ubuntu/Debian based distributions, install the following packages:
 
 On Arch Linux, install the required Qt6 packages:
 
-    sudo pacman -S python-pyside6
+    sudo pacman -S pyside6
+
+For enhanced KDE Plasma integration on Arch Linux (optional):
+
+    sudo pacman -S kstatusnotifieritem
 
 On Fedora, install the Qt6 Python bindings:
 
