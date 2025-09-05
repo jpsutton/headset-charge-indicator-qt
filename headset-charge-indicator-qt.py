@@ -14,6 +14,7 @@ import os
 import sys
 from shutil import which
 from subprocess import check_output, CalledProcessError
+from utils import add_method
 
 # Force X11 platform to avoid potential Wayland issues
 #os.environ['QT_QPA_PLATFORM'] = 'xcb'
@@ -21,6 +22,11 @@ from subprocess import check_output, CalledProcessError
 try:
     # Try to use KDE's native libraries for rich tooltips
     from KStatusNotifierItem import KStatusNotifierItem
+
+    @add_method(KStatusNotifierItem)
+    def setIcon(self, icon):
+        self.setIconByPixmap(icon.pixmap(64, 64))
+
     KDE_LIBRARIES_PRESENT = True
 except ImportError:
     # Fallback to basic Qt if KDE libraries aren't available
@@ -35,7 +41,7 @@ from PySide6.QtGui import QIcon, QAction, QPainter, QPixmap, QColor
 from PySide6.QtCore import QTimer, QSettings
 from PySide6.QtWidgets import QSystemTrayIcon
 
-APPINDICATOR_ID = 'headset-charge-indicator'
+APP_NAME = 'headset-charge-indicator-qt'
 
 global HEADSETCONTROL_BINARY
 HEADSETCONTROL_BINARY = None
@@ -83,6 +89,14 @@ last_battery_state = None  # 'high', 'medium', 'low', 'charging', 'unavailable'
 # Global settings object
 global settings
 settings = None
+
+
+def setTrayToolTip(title, subtitle):
+    if KDE_AVAILABLE:
+        tray.setToolTipTitle(f"<b>{title}</b>")
+        tray.setToolTipSubTitle(subtitle)
+    else:
+        tray.setToolTip(f"{title}\n{subtitle}")
 
 
 def save_setting(key, value):
@@ -191,22 +205,23 @@ def send_battery_notification(title, message, urgency="normal"):
     
     if tray is None or args.no_notifications:
         return
-    
-    # Show the notification using appropriate method
-    if KDE_AVAILABLE:
-        # Use KDE's native notification system with icon and timeout
-        tray.showMessage(title, message, "audio-headset", NOTIFICATION_TIMEOUT)
-    else:
-        # Map urgency to QSystemTrayIcon message icons
-        if urgency == "critical":
+          
+    match (KDE_AVAILABLE, urgency):
+        case (False, "critical"):
             icon = QSystemTrayIcon.MessageIcon.Critical
-        elif urgency == "warning":
+        case (False, "warning"):
             icon = QSystemTrayIcon.MessageIcon.Warning
-        else:
+        case (False, _):
             icon = QSystemTrayIcon.MessageIcon.Information
+        case (True, "critical"):
+            icon = "dialog-error"
+        case (True, "warning"):
+            icon = "dialog-warning"
+        case (True, _):
+            icon = "dialog-information"
         
-        # Show the notification
-        tray.showMessage(title, message, icon, NOTIFICATION_TIMEOUT)  # 5 second timeout
+    tray.showMessage(title, message, icon, NOTIFICATION_TIMEOUT)
+    
 
 
 def get_battery_state(battery_level):
@@ -224,44 +239,40 @@ def get_battery_icon(battery_level):
     if battery_level == -1:  # Charging
         # Try charging icons with fallbacks
         charging_icons = ["battery-charging", "battery-charging-symbolic", "battery-full-charging"]
-        for icon_name in charging_icons:
-            icon = QIcon.fromTheme(icon_name)
-            if not icon.isNull():
-                return icon
+        icon = pick_preferred_icon(charging_icons)
+        if not icon.isNull():
+            return icon
     elif battery_level == -2:  # Unavailable
         # Try missing/unavailable icons with fallbacks
         missing_icons = ["battery-missing", "battery-missing-symbolic", "battery-empty"]
-        for icon_name in missing_icons:
-            icon = QIcon.fromTheme(icon_name)
-            if not icon.isNull():
-                return icon
+        icon = pick_preferred_icon(missing_icons)
+        if not icon.isNull():
+            return icon
     else:
         # Regular battery level icons
         if battery_level >= 90:
-            icon_names = ["battery-full", "battery-100", "battery-full-symbolic"]
+            icon_names = ["battery-full-symbolic", "battery-full", "battery-100"]
         elif battery_level >= 75:
-            icon_names = ["battery-good", "battery-080", "battery-good-symbolic"]
+            icon_names = ["battery-good-symbolic", "battery-good", "battery-080"]
         elif battery_level >= 50:
-            icon_names = ["battery-medium", "battery-060", "battery-medium-symbolic"]
+            icon_names = ["battery-medium-symbolic", "battery-medium", "battery-060"]
         elif battery_level >= 25:
-            icon_names = ["battery-low", "battery-040", "battery-low-symbolic"]
+            icon_names = ["battery-low-symbolic", "battery-low", "battery-040"]
         elif battery_level >= 10:
-            icon_names = ["battery-caution", "battery-020", "battery-caution-symbolic"]
+            icon_names = ["battery-caution-symbolic", "battery-caution", "battery-020"]
         else:
-            icon_names = ["battery-empty", "battery-000", "battery-empty-symbolic"]
+            icon_names = ["battery-empty-symbolic", "battery-empty", "battery-000"]
         
         # Try each icon name until we find one that exists
-        for icon_name in icon_names:
-            icon = QIcon.fromTheme(icon_name)
-            if not icon.isNull():
-                return icon
+        icon = pick_preferred_icon(icon_names)
+        if not icon.isNull():
+            return icon
     
     # Final fallback to a generic battery icon
     fallback_icons = ["battery", "battery-symbolic", "power-profile-balanced"]
-    for icon_name in fallback_icons:
-        icon = QIcon.fromTheme(icon_name)
-        if not icon.isNull():
-            return icon
+    icon = pick_preferred_icon(fallback_icons)
+    if not icon.isNull():
+        return icon
     
     # If no icon found, return empty icon
     return QIcon()
@@ -332,12 +343,6 @@ def check_battery_notifications(battery_level, battery_state):
     last_battery_state = battery_state
 
 
-def change_icon():
-    # Placeholder function for Qt6 implementation
-    # Icon changes are handled directly in change_label() for battery level coloring
-    pass
-
-
 def fetch_capabilities():
     try:
         # ask HeadsetControl for the available capabilities for the current headset
@@ -348,22 +353,8 @@ def fetch_capabilities():
             data = json.loads(output.decode('utf-8'))
             if 'devices' in data and len(data['devices']) > 0:
                 device = data['devices'][0]  # Use first device
-                capabilities = []
                 device_caps = device.get('capabilities', [])
-                
-                # Check for capabilities based on the capability strings
-                if 'CAP_BATTERY_STATUS' in device_caps:
-                    capabilities.append(b'b')
-                if 'CAP_CHATMIX' in device_caps:
-                    capabilities.append(b'm')
-                if 'CAP_SIDETONE' in device_caps:
-                    capabilities.append(b's')
-                if 'CAP_LED' in device_caps:
-                    capabilities.append(b'l')
-                if 'CAP_INACTIVE_TIME' in device_caps:
-                    capabilities.append(b'i')
-                    
-                return b''.join(capabilities)
+                return device_caps
         except (json.JSONDecodeError, KeyError) as e:
             print(f"Warning: Failed to parse capabilities JSON: {e}")
             return "all"
@@ -378,6 +369,8 @@ def change_label():
     global charge_action, tray, last_battery_level, last_battery_state
     try:
         output = check_output([HEADSETCONTROL_BINARY, OPTION_BATTERY, OPTION_SILENT, OPTION_OUTPUT, OPTION_OUTPUT_FORMAT])
+
+        tooltip_title = "Headset"
 
         # Parse JSON output to extract battery level
         try:
@@ -402,12 +395,8 @@ def change_label():
         # -1 indicates "Battery is charging"
         if battery_level == -1:
             text = 'Chg'
-            tooltip_text = '<b>Headset</b><br/>Charging'
-            # Use original icon when charging
-            if KDE_AVAILABLE:
-                tray.setIconByPixmap(base_icon.pixmap(64, 64))
-            else:
-                tray.setIcon(base_icon)
+            tooltip_text = 'Charging'
+            tray.setIcon(base_icon)
             # Handle charging state change notification
             if last_battery_state is not None and last_battery_state != 'charging':
                 send_battery_notification(
@@ -419,12 +408,8 @@ def change_label():
         # -2 indicates "Battery is unavailable"
         elif battery_level == -2:
             text = 'Off'
-            tooltip_text = '<b>Headset</b><br/>Battery Unavailable'
-            # Use original icon when unavailable
-            if KDE_AVAILABLE:
-                tray.setIconByPixmap(base_icon.pixmap(64, 64))
-            else:
-                tray.setIcon(base_icon)
+            tooltip_text = 'Battery Unavailable'
+            tray.setIcon(base_icon)
             # Handle unavailable state change notification
             if last_battery_state is not None and last_battery_state != 'unavailable':
                 send_battery_notification(
@@ -436,13 +421,10 @@ def change_label():
         else:
             text = str(battery_level) + '%'
             # Format tooltip with rich HTML formatting
-            tooltip_text = f'<b>Headset</b><br/>Battery: <b>{text}</b>'
+            tooltip_text = f'Battery: {text}'
             # Update icon with battery level overlay
             colored_icon = create_battery_overlay_icon(battery_level)
-            if KDE_AVAILABLE:
-                tray.setIconByPixmap(colored_icon.pixmap(64, 64))
-            else:
-                tray.setIcon(colored_icon)
+            tray.setIcon(colored_icon)
             
             # Determine battery state and check for notifications
             battery_state = get_battery_state(battery_level)
@@ -451,22 +433,12 @@ def change_label():
     except CalledProcessError as e:
         print(e)
         text = 'N/A'
-        tooltip_text = '<b>Headset</b><br/>Connection Error'
+        tooltip_text = 'Connection Error'
         battery_level = -2  # Set to unavailable on error
-        # Use original icon on error
-        if KDE_AVAILABLE:
-            tray.setIconByPixmap(base_icon.pixmap(64, 64))
-        else:
-            tray.setIcon(base_icon)
+        tray.setIcon(base_icon)
 
-    # Update tooltip with rich formatting (main feature for KDE!)
-    if KDE_AVAILABLE:
-        tray.setToolTipTitle("Headset")
-        tray.setToolTipSubTitle(tooltip_text.replace('<b>Headset</b><br/>', ''))
-    else:
-        # Fallback to plain text for non-KDE systems
-        plain_text = tooltip_text.replace('<b>', '').replace('</b>', '').replace('<br/>', '\n')
-        tray.setToolTip(plain_text)
+    setTrayToolTip(tooltip_title, tooltip_text)
+
     # Update menu item with icon
     charge_action.setText('Charge: ' + text)
     
@@ -608,14 +580,6 @@ def set_led(level):
 
 
 def sidetone_menu(parent_menu):
-    # we map 5 levels to the range of [0-128]
-    # The Steelseries Arctis internally supports 0-0x12, i.e. 0-18
-    #    OFF -> 0
-    #    LOW -> 32
-    #    MEDIUM -> 64
-    #    HIGH -> 96
-    #    MAX -> 128
-
     sidemenu = parent_menu.addMenu("Sidetone")
     
     # Get current sidetone level from stored settings
@@ -709,10 +673,9 @@ def led_menu(parent_menu):
 def refresh():
     cap = fetch_capabilities()
 
-    change_icon()
-    if "all" == cap or b'b' in cap:
+    if "all" == cap or 'CAP_BATTERY_STATUS' in cap:
         change_label()
-    if "all" == cap or b'm' in cap:
+    if "all" == cap or 'CAP_CHATMIX' in cap:
         change_chatmix()
     
     # return True to keep the timer running
@@ -732,12 +695,32 @@ def locate_headsetcontrol_binary(binary_location):
 
     return location
 
+def pick_preferred_icon(icon_names):
+    for icon_name in icon_names:
+        icon = QIcon.fromTheme(icon_name)
+        if not icon.isNull():
+            return icon
+    return icon
+
+def left_click_action():
+    send_battery_notification("Headset", "Headset is charging", "normal")
+
 
 def create_system_tray():
     global app, tray, charge_action, chatmix_action, base_icon
     
+    icon_candidates = [
+            "audio-headset-symbolic",      # Symbolic (monochrome) version
+            "audio-headphones-symbolic",   # Symbolic headphones
+            "audio-headset",               # Regular colored version
+            "audio-headphones",            # Regular headphones  
+            "audio-card",                  # Audio card fallback
+            "multimedia-player"            # Final fallback
+    ]
+
     # Create application
     app = QApplication.instance()
+
     if app is None:
         app = QApplication(sys.argv)
     
@@ -746,7 +729,7 @@ def create_system_tray():
     if KDE_AVAILABLE:
         print("Using KDE KStatusNotifierItem with rich tooltip support")
         # Create KDE status notifier item for rich tooltips
-        tray = KStatusNotifierItem(APPINDICATOR_ID)
+        tray = KStatusNotifierItem(APP_NAME)
         tray.setCategory(KStatusNotifierItem.ItemCategory.Hardware)
         tray.setStatus(KStatusNotifierItem.ItemStatus.Active)
         tray.setTitle("Headset Charge Indicator")
@@ -762,40 +745,11 @@ def create_system_tray():
     
     # Icon selection with user preference
     if args.icon_name:
-        # User specified a specific icon
-        base_icon = QIcon.fromTheme(args.icon_name)
-        if base_icon.isNull():
-            print(f"Warning: Specified icon '{args.icon_name}' not found, falling back to defaults")
-    
-    if args.icon_name is None or base_icon.isNull():
-        # Default preference with fallback - try monochrome/symbolic versions first
-        icon_candidates = [
-            "audio-headset-symbolic",      # Symbolic (monochrome) version
-            "audio-headphones-symbolic",   # Symbolic headphones
-            "audio-headset",               # Regular colored version
-            "audio-headphones",            # Regular headphones  
-            "audio-card",                  # Audio card fallback
-            "multimedia-player"            # Final fallback
-        ]
-        
-        for icon_name in icon_candidates:
-            base_icon = QIcon.fromTheme(icon_name)
-            if not base_icon.isNull():
-                break
-    
-    if base_icon.isNull():
-        # Final fallback to a standard system icon
-        style = app.style()
-        base_icon = style.standardIcon(style.StandardPixmap.SP_MediaVolume)
-    
-    if KDE_AVAILABLE:
-        # For KDE, use the same base_icon we resolved above
-        tray.setIconByPixmap(base_icon.pixmap(64, 64))
-        tray.setToolTipTitle("Headset")
-        tray.setToolTipSubTitle("Initializing...")
-    else:
-        tray.setIcon(base_icon)
-        tray.setToolTip("Headset\nInitializing...")
+        icon_candidates.insert(0, args.icon_name)
+
+    base_icon = pick_preferred_icon(icon_candidates)
+    tray.setIcon(base_icon)
+    setTrayToolTip("Headset", "Initializing...")
     
     cap = fetch_capabilities()
 
@@ -804,85 +758,84 @@ def create_system_tray():
     
     # Refresh item
     refresh_action = QAction("Refresh", menu)
-    refresh_icon = QIcon.fromTheme("view-refresh")
+    refresh_icon = pick_preferred_icon(["view-refresh"])
     if not refresh_icon.isNull():
         refresh_action.setIcon(refresh_icon)
     refresh_action.triggered.connect(refresh)
     menu.addAction(refresh_action)
 
+    features = {
+        "CAP_BATTERY_STATUS": {
+            "type": "action",
+            "name": "charge",
+            "text": "Charge: -1",
+            "icons": ["battery-missing"]
+        },
+        "CAP_CHATMIX": {
+            "type": "action",
+            "name": "chatmix",
+            "text": "Chat: -1",
+            "icons": ["audio-input-microphone", "microphone", "audio-input-microphone-symbolic", "call-start"]
+        },
+        "CAP_SIDETONE": {
+            "type": "submenu",
+            "submenu": sidetone_menu,
+            "text": "Sidetone",
+            "icons": ["audio-headphones-symbolic", "audio-headphones", "audio-headset-symbolic", "audio-headset"]
+        },
+        "CAP_LED": {
+            "type": "submenu",
+            "submenu": led_menu,
+            "text": "LED",
+            "icons": ["preferences-desktop-theme", "led", "lightbulb", "weather-clear", "brightness-high"]
+        },
+        "CAP_INACTIVE_TIME": {
+            "type": "submenu",
+            "submenu": inactive_time_menu,
+            "text": "Inactive time",
+            "icons": ["preferences-system-time", "clock", "appointment-soon", "timer", "chronometer"]
+        }
+    }
+
     # Add capability-based menu items
-    if "all" == cap or b'b' in cap:
-        charge_action = QAction("Charge: -1", menu)
-        # Set initial battery icon (will be updated in change_label)
-        battery_icon = QIcon.fromTheme("battery-missing")
-        if not battery_icon.isNull():
-            charge_action.setIcon(battery_icon)
-        menu.addAction(charge_action)
+    for feature, data in features.items():
+        if "all" == cap or feature in cap:
+            icon = pick_preferred_icon(data["icons"])
 
-    if "all" == cap or b'm' in cap:
-        chatmix_action = QAction("Chat: -1", menu)
-        # Add microphone/chat icon
-        chatmix_icons = ["audio-input-microphone", "microphone", "audio-input-microphone-symbolic", "call-start"]
-        for icon_name in chatmix_icons:
-            chatmix_icon = QIcon.fromTheme(icon_name)
-            if not chatmix_icon.isNull():
-                chatmix_action.setIcon(chatmix_icon)
-                break
-        menu.addAction(chatmix_action)
+            if data["type"] == "action":
+                action = QAction(data["text"], menu)
+                action_var = f"{data['name']}_action"
 
-    if "all" == cap or b's' in cap:
-        sidetone_submenu = sidetone_menu(menu)
-        # Add headphones icon to sidetone submenu
-        sidetone_icons = ["audio-headphones", "audio-headset", "audio-headphones-symbolic", "audio-headset-symbolic"]
-        for icon_name in sidetone_icons:
-            sidetone_icon = QIcon.fromTheme(icon_name)
-            if not sidetone_icon.isNull():
-                sidetone_submenu.setIcon(sidetone_icon)
-                break
-
-    if "all" == cap or b'l' in cap:
-        led_submenu = led_menu(menu)
-        # Add LED/light icon to LED submenu
-        led_icons = ["preferences-desktop-theme", "led", "lightbulb", "weather-clear", "brightness-high"]
-        for icon_name in led_icons:
-            led_icon = QIcon.fromTheme(icon_name)
-            if not led_icon.isNull():
-                led_submenu.setIcon(led_icon)
-                break
-
-    if "all" == cap or b'i' in cap:
-        inactive_submenu = inactive_time_menu(menu)
-        # Add timer/clock icon to inactive time submenu
-        inactive_icons = ["preferences-system-time", "clock", "appointment-soon", "timer", "chronometer"]
-        for icon_name in inactive_icons:
-            inactive_icon = QIcon.fromTheme(icon_name)
-            if not inactive_icon.isNull():
-                inactive_submenu.setIcon(inactive_icon)
-                break
+                if action_var in globals():
+                    globals()[action_var] = action
+                    
+                action.setIcon(icon)
+                menu.addAction(action)
+            elif data["type"] == "submenu":
+                submenu = data["submenu"](menu)
+                submenu.setIcon(icon)
+                menu.addMenu(submenu)
 
 
-
-    # Exit item if using Qt system tray
     if KDE_AVAILABLE:
+        # Bypass confirmation dialog for KDE
         tray.quitRequested.connect(quit_app)
+        tray.activateRequested.connect(left_click_action)
     else:
+        # Add quit menu item to mimic KDE
         menu.addSeparator()
-        exit_action = QAction("Quit", menu)
-        # Add quit/exit icon
-        quit_icons = ["application-exit", "system-log-out", "exit", "window-close", "process-stop"]
-        for icon_name in quit_icons:
-            quit_icon = QIcon.fromTheme(icon_name)
-            if not quit_icon.isNull():
-                exit_action.setIcon(quit_icon)
-                break
-        exit_action.triggered.connect(quit_app)
-        menu.addAction(exit_action)
+        quit_action = QAction("Quit", menu)
+        quit_icon = pick_preferred_icon(["application-exit", "system-log-out", "exit", "window-close", "process-stop"])
 
-    if KDE_AVAILABLE:
-        tray.setContextMenu(menu)
-        # KStatusNotifierItem shows automatically when status is Active
-    else:
-        tray.setContextMenu(menu)
+        if not quit_icon.isNull():
+            quit_action.setIcon(quit_icon)
+
+        quit_action.triggered.connect(quit_app)
+        menu.addAction(quit_action)
+        tray.activated.connect(left_click_action)
+    tray.setContextMenu(menu)
+
+    if not KDE_AVAILABLE:
         # Show tray icon for Qt system tray
         tray.show()
 
