@@ -2,7 +2,7 @@
 
 _pkgname='headset-charge-indicator-qt'
 pkgname="${_pkgname}-git"
-pkgver=0.r85.4dc1454
+pkgver=0.r87.b6fa396
 pkgrel=1
 pkgdesc='Qt6-based system tray application to display battery charge of wireless headsets with enhanced KDE Plasma integration'
 arch=('any')

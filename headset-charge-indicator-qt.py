@@ -452,6 +452,7 @@ def change_label():
         print(e)
         text = 'N/A'
         tooltip_text = '<b>Headset</b><br/>Connection Error'
+        battery_level = -2  # Set to unavailable on error
         # Use original icon on error
         if KDE_AVAILABLE:
             tray.setIconByPixmap(base_icon.pixmap(64, 64))
